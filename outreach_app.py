@@ -3,8 +3,8 @@ import re
 import time
 import random
 import smtplib
-import json
 import os
+import pyotp
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import pandas as pd
@@ -12,40 +12,28 @@ import pandas as pd
 st.set_page_config(page_title="Multi-Account Outreach Portal", layout="wide")
 
 st.title("运输 | Smart Carrier Outreach Engine (v2.2)")
-st.write("Extract targets, enforce domain blacklists, randomize delays, personalize templates, and automatically save settings.")
 
-# --- FILE PATHS FOR STORAGE (Saves in the same folder as the script) ---
-SENDERS_FILE = "senders_config.txt"
-BLACKLIST_FILE = "blacklist_config.txt"
-TEMPLATE_FILE = "template_config.json"
+# --- GOOGLE AUTHENTICATOR SECURITY GATE ---
+if "otp_authenticated" not in st.session_state:
+    st.session_state.otp_authenticated = False
 
-# --- HELPER FUNCTIONS FOR AUTO-SAVE ---
-def load_text_file(filepath, default_val):
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    return default_val
-
-def save_text_file(filepath, content):
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
-
-def load_template():
-    default = {
-        "subject": "Available Equipment / Partnership with {domain}",
-        "body": "Hello,\n\nWe noticed you are running active equipment. We wanted to reach out to you directly at {email}. AR Transport provides full-service dispatching with consistent premium loads, direct broker lines, and custom maintenance perks.\n\nLet us know if you have trucks open this week!\n\nBest regards,\nTony Burns"
-    }
-    if os.path.exists(TEMPLATE_FILE):
-        try:
-            with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return default
-    return default
-
-def save_template(subject, body):
-    with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"subject": subject, "body": body}, f, ensure_ascii=False, indent=4)
+if not st.session_state.otp_authenticated:
+    st.subheader("🔒 Two-Factor Authentication Required")
+    st.write("Open your Google Authenticator app and enter the 6-digit verification code below.")
+    
+    token_input = st.text_input("Verification Code", max_chars=6, placeholder="000000", type="password")
+    
+    if st.button("Verify & Unlock Engine", width="stretch"):
+        totp = pyotp.TOTP('ZHSKYAFEJJIEUFDSYYDAIVZA632CC2QP') 
+        
+        if totp.verify(token_input.strip()):
+            st.session_state.otp_authenticated = True
+            st.success("Authentication successful! Welcome back.")
+            st.rerun()
+        else:
+            st.error("Invalid token code or code expired. Please try again.")
+            
+    st.stop()  
 
 # --- INITIALIZE AUTOMATION STATE ---
 if "campaign_running" not in st.session_state:
@@ -62,27 +50,15 @@ if "batch_counter" not in st.session_state:
 # --- SIDEBAR: ANTI-SPAM CONTROLS & BLACKLIST ---
 st.sidebar.header("🛡️ Anti-Spam & Delivery Settings")
 
-# Custom Delays
-st.sidebar.subheader("⏱️ Delay Between Emails")
 min_delay, max_delay = st.sidebar.slider("Randomized Delay Range (seconds):", 1, 120, (5, 15))
 
-# Custom Cooldown Batches (Completely running in seconds)
-st.sidebar.subheader("💤 Custom Cooldown Triggers")
 enable_cooldown = st.sidebar.checkbox("Enable Batch Cooldown Period", value=False)
 if enable_cooldown:
     emails_per_batch = st.sidebar.number_input("Send maximum of (emails):", min_value=1, value=10)
     cooldown_seconds = st.sidebar.number_input("Then pause engine for (seconds):", min_value=1, value=30)
 
-# Blacklist Configuration (Auto-saved)
 st.sidebar.subheader("🚫 Domain & Keyword Blacklist")
-default_blacklist = "badbroker.com\ndontemail.com\nspam"
-saved_blacklist_content = load_text_file(BLACKLIST_FILE, default_blacklist)
-blacklist_input = st.sidebar.text_area("Paste domains or keywords to block:", value=saved_blacklist_content, height=120)
-
-# Auto-save blacklist adjustments instantly
-if blacklist_input != saved_blacklist_content:
-    save_text_file(BLACKLIST_FILE, blacklist_input)
-
+blacklist_input = st.sidebar.text_area("Paste domains or keywords to block:", placeholder="badbroker.com\ndontemail.com", height=120)
 blacklist = [line.strip().lower() for line in blacklist_input.strip().split("\n") if line.strip()]
 
 # --- STEP 1: SENDER ACCOUNTS CONFIGURATION ---
@@ -92,13 +68,7 @@ with st.expander("👉 Click to manage your Sender Emails & App Passwords", expa
     *Paste your sending accounts below—one per line—separating the email and password with a comma.*
     """)
     
-    default_senders = "sender1@gmail.com, app_password_here\nsender2@gmail.com, app_password_here"
-    saved_senders_content = load_text_file(SENDERS_FILE, default_senders)
-    senders_input = st.text_area("Sender Accounts List:", value=saved_senders_content, height=120)
-    
-    # Auto-save senders list instantly when changed
-    if senders_input != saved_senders_content:
-        save_text_file(SENDERS_FILE, senders_input)
+    senders_input = st.text_area("Sender Accounts List:", placeholder="sender1@gmail.com, app_password_here\nsender2@gmail.com, app_password_here", height=120)
     
     parsed_senders = []
     for line in senders_input.strip().split("\n"):
@@ -117,7 +87,6 @@ with col_data:
         height=180
     )
 
-# Real-time regex extraction engine
 raw_targets = list(set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', raw_data_feed)))
 
 extracted_targets = []
@@ -146,13 +115,8 @@ with col_preview:
 st.header("✉️ 3. Customize Your Personalised Template")
 st.caption("Available Placeholders: `{email}` = Full recipient email address | `{domain}` = Email company domain name")
 
-saved_template = load_template()
-email_subject = st.text_input("Email Subject Line:", value=saved_template["subject"])
-email_body = st.text_area("Email Body Text:", value=saved_template["body"], height=180)
-
-# Auto-save layout template when edited
-if email_subject != saved_template["subject"] or email_body != saved_template["body"]:
-    save_template(email_subject, email_body)
+email_subject = st.text_input("Email Subject Line:", placeholder="Available Equipment / Partnership with {domain}")
+email_body = st.text_area("Email Body Text:", placeholder="Hello,\n\nWe noticed you are running active equipment...", height=180)
 
 # --- BACKEND SMTP ENGINE ---
 def send_outreach_email(sender_meta, target_email, subject, body):
@@ -260,7 +224,6 @@ if st.session_state.history_logs:
     df_logs = pd.DataFrame(st.session_state.history_logs)
     st.dataframe(df_logs, width="stretch")
     
-    # Export Log Engine
     csv_data = df_logs.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="📥 Download Delivery Sheet to Excel/CSV",
